@@ -12,21 +12,21 @@ const ALLOWED_ORIGINS = [
 
 const MESSAGE_TYPES = {
   // Incoming
-  PING: 'ping',
-  MOUNT_FILES: 'mount_files',
-  RUN_COMMAND: 'run_command',
-  WRITE_FILE: 'write_file',
-  READ_FILE: 'read_file',
+  PING: 'PING',
+  MOUNT_FILES: 'MOUNT_FILES',
+  RUN_COMMAND: 'RUN_COMMAND',
+  WRITE_FILE: 'WRITE_FILE',
+  READ_FILE: 'READ_FILE',
   
   // Outgoing
-  READY: 'ready',
-  PONG: 'pong',
-  COMMAND_OUTPUT: 'command_output',
-  COMMAND_EXIT: 'command_exit',
-  SERVER_READY: 'server_ready',
-  FILE_CONTENT: 'file_content',
-  ERROR: 'error',
-  STATUS_UPDATE: 'status_update'
+  READY: 'READY',
+  PONG: 'PONG',
+  COMMAND_OUTPUT: 'COMMAND_OUTPUT',
+  COMMAND_EXIT: 'COMMAND_EXIT',
+  SERVER_READY: 'SERVER_READY',
+  FILE_CONTENT: 'FILE_CONTENT',
+  ERROR: 'ERROR',
+  STATUS_UPDATE: 'STATUS_UPDATE'
 };
 
 // State
