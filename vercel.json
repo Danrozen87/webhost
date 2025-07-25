@@ -16,12 +16,8 @@
           "value": "cross-origin"
         },
         {
-          "key": "X-Frame-Options",
-          "value": "ALLOWALL"
-        },
-        {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'self' https://*.lovable.dev https://lovable.dev http://localhost:* https://*.vercel.app;"
+          "value": "frame-ancestors *;"
         },
         {
           "key": "Permissions-Policy",
