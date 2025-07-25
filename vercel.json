@@ -17,11 +17,11 @@
         },
         {
           "key": "X-Frame-Options",
-          "value": "SAMEORIGIN"
+          "value": "ALLOWALL"
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors 'self' https://lovable.dev http://localhost:*;"
+          "value": "frame-ancestors 'self' https://*.lovable.dev https://lovable.dev http://localhost:* https://*.vercel.app;"
         },
         {
           "key": "Permissions-Policy",
