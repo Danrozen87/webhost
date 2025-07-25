@@ -5,10 +5,10 @@
       "headers": [
         {
           "key": "Cross-Origin-Embedder-Policy",
-          "value": "unsafe-none"
+          "value": "require-corp"
         },
         {
-          "key": "Cross-Origin-Opener-Policy",
+          "key": "Cross-Origin-Opener-Policy", 
           "value": "same-origin"
         },
         {
@@ -17,7 +17,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "frame-ancestors *;"
+          "value": "frame-ancestors https://*.lovableproject.com https://*.lovable.dev https://*.vercel.app 'self';"
         },
         {
           "key": "Permissions-Policy",
