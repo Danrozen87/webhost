@@ -1,5 +1,9 @@
 import { WebContainer } from '@webcontainer/api';
 
+// Environment checks
+const isInIframe = window.self !== window.top;
+const selfOrigin = window.location.origin;
+
 // Constants
 const MESSAGE_TYPES = {
   // Incoming
@@ -57,6 +61,9 @@ function sendMessage(type, payload = {}, targetOrigin = '*') {
 }
 
 function isAllowedOrigin(origin) {
+  // Ignore self
+  if (origin === selfOrigin) return false;
+  
   // Allow null and file origins (for testing)
   if (origin === 'null' || origin === 'file://') return true;
   
@@ -77,6 +84,11 @@ function isAllowedOrigin(origin) {
 
 // Start heartbeat to establish connection
 function startHeartbeat() {
+  if (!isInIframe) {
+    updateStatus('Not in iframe - open this URL in your app', 'ready');
+    return;
+  }
+  
   let attempts = 0;
   
   heartbeatInterval = setInterval(() => {
@@ -112,8 +124,10 @@ async function initWebContainer() {
     
     updateStatus('WebContainer ready - Waiting for parent...', 'ready');
     
-    // Send initial ready message
-    window.parent.postMessage({ type: 'ready' }, '*');
+    // Send initial ready message only if in iframe
+    if (isInIframe) {
+      window.parent.postMessage({ type: 'ready' }, '*');
+    }
     
     // Start heartbeat
     startHeartbeat();
@@ -251,7 +265,13 @@ const messageHandlers = {
 
 // Message listener
 window.addEventListener('message', async (event) => {
-  // Log ALL messages for debugging
+  // Ignore messages from self
+  if (event.origin === selfOrigin) {
+    console.log('[Ignored] Message from self');
+    return;
+  }
+  
+  // Log ALL external messages
   console.log('[Received from]', event.origin, ':', event.data);
   
   // Security check
@@ -294,6 +314,8 @@ window.addEventListener('message', async (event) => {
 
 // Health check endpoint
 window.addEventListener('message', (event) => {
+  if (event.origin === selfOrigin) return;
+  
   if (event.data === 'health-check') {
     event.source.postMessage({
       status: 'healthy',
