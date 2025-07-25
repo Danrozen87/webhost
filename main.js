@@ -1,18 +1,6 @@
 import { WebContainer } from '@webcontainer/api';
 
 // Constants
-const ALLOWED_ORIGINS = [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:8080',
-  'https://vercel.app',
-  'https://lovable.dev',
-  'https://webhost-gilt.vercel.app',  // Add your own domain!
-  'https://stackblitz.com',            // WebContainer's internal origin
-  'https://*.stackblitz.io',           // WebContainer infrastructure
-  // Add your production domains here
-];
-
 const MESSAGE_TYPES = {
   // Incoming
   PING: 'PING',
@@ -36,6 +24,8 @@ const MESSAGE_TYPES = {
 let webcontainerInstance = null;
 let currentProcess = null;
 let serverUrl = null;
+let connected = false;
+let heartbeatInterval = null;
 
 // DOM elements
 const statusIndicator = document.getElementById('status-indicator');
@@ -67,9 +57,46 @@ function sendMessage(type, payload = {}, targetOrigin = '*') {
 }
 
 function isAllowedOrigin(origin) {
-  // In development, allow all origins
+  // Allow null and file origins (for testing)
   if (origin === 'null' || origin === 'file://') return true;
-  return ALLOWED_ORIGINS.some(allowed => origin.startsWith(allowed));
+  
+  // List of allowed domain patterns
+  const allowedDomains = [
+    'localhost',
+    'lovable',
+    'vercel',
+    'stackblitz',
+    'webcontainer.io',
+    'supabase.co',
+    'supabase.com'
+  ];
+  
+  // Check if origin contains any of the allowed domains
+  return allowedDomains.some(domain => origin.includes(domain));
+}
+
+// Start heartbeat to establish connection
+function startHeartbeat() {
+  let attempts = 0;
+  
+  heartbeatInterval = setInterval(() => {
+    if (!connected) {
+      attempts++;
+      console.log(`[Heartbeat] Attempt ${attempts} - Broadcasting ready signal...`);
+      
+      // Try multiple message formats to ensure compatibility
+      window.parent.postMessage({ type: 'ready' }, '*');
+      window.parent.postMessage({ type: 'READY' }, '*');
+      window.parent.postMessage('ready', '*');
+      window.parent.postMessage({ 
+        type: 'WEBCONTAINER_READY',
+        status: 'ready',
+        timestamp: Date.now() 
+      }, '*');
+      
+      updateStatus(`Waiting for connection... (attempt ${attempts})`, 'loading');
+    }
+  }, 1000); // Send every second
 }
 
 // WebContainer initialization
@@ -83,8 +110,13 @@ async function initWebContainer() {
       forwardPreviewErrors: true
     });
     
-    updateStatus('WebContainer ready', 'ready');
+    updateStatus('WebContainer ready - Waiting for parent...', 'ready');
+    
+    // Send initial ready message
     window.parent.postMessage({ type: 'ready' }, '*');
+    
+    // Start heartbeat
+    startHeartbeat();
     
     // Set up server ready listener
     webcontainerInstance.on('server-ready', (port, url) => {
@@ -118,8 +150,18 @@ async function initWebContainer() {
 
 // Message handlers
 const messageHandlers = {
-  [MESSAGE_TYPES.PING]: () => {
+  'PING': () => {
+    connected = true;
+    clearInterval(heartbeatInterval);
+    updateStatus('Connected! Responding to PING', 'ready');
     sendMessage(MESSAGE_TYPES.PONG);
+  },
+  
+  'ping': () => {
+    connected = true;
+    clearInterval(heartbeatInterval);
+    updateStatus('Connected! Responding to ping', 'ready');
+    sendMessage('pong');
   },
   
   [MESSAGE_TYPES.MOUNT_FILES]: async ({ files }) => {
@@ -209,16 +251,33 @@ const messageHandlers = {
 
 // Message listener
 window.addEventListener('message', async (event) => {
+  // Log ALL messages for debugging
+  console.log('[Received from]', event.origin, ':', event.data);
+  
   // Security check
   if (!isAllowedOrigin(event.origin)) {
     console.warn('[Security] Rejected message from', event.origin);
     return;
   }
   
-  const { type, payload } = event.data || {};
-  console.log('[Received]', type, payload);
+  // Mark as connected on first valid message
+  if (!connected && event.data && (event.data.type || typeof event.data === 'string')) {
+    connected = true;
+    clearInterval(heartbeatInterval);
+    updateStatus('Connected to parent!', 'ready');
+  }
   
-  const handler = messageHandlers[type];
+  // Handle string messages
+  if (typeof event.data === 'string') {
+    if (event.data.toLowerCase() === 'ping') {
+      messageHandlers['ping']();
+      return;
+    }
+  }
+  
+  const { type, payload } = event.data || {};
+  
+  const handler = messageHandlers[type] || messageHandlers[type?.toLowerCase()];
   if (handler) {
     try {
       await handler(payload);
@@ -239,13 +298,17 @@ window.addEventListener('message', (event) => {
     event.source.postMessage({
       status: 'healthy',
       webcontainer: !!webcontainerInstance,
-      serverUrl
+      serverUrl,
+      connected
     }, event.origin);
   }
 });
 
 // Cleanup on unload
 window.addEventListener('beforeunload', () => {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+  }
   if (currentProcess) {
     currentProcess.kill();
   }
