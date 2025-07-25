@@ -79,6 +79,7 @@ function isAllowedOrigin(origin) {
   const allowedPatterns = [
     'localhost',
     'lovable.dev',
+     'https://7f818ebb-e5cc-4179-8f6c-e01617c5204a.lovableproject.com',
     'lovableproject.com',  // This is the key one!
     'vercel.app',
     'stackblitz.io',
