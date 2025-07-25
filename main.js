@@ -2,6 +2,8 @@ import { WebContainer } from '@webcontainer/api';
 
 // Environment checks
 const isInIframe = window.self !== window.top;
+const isInPopup = !!window.opener;
+const isEmbedded = isInIframe || isInPopup;
 const selfOrigin = window.location.origin;
 
 // Constants
@@ -64,7 +66,9 @@ function sendMessage(type, payload = {}, targetOrigin = '*', messageId = null) {
     message.id = messageId;
   }
   
-  window.parent.postMessage(message, targetOrigin);
+  // Send to parent (iframe) or opener (popup)
+  const target = window.opener || window.parent;
+  target.postMessage(message, targetOrigin);
   console.log('[Sent]', type, messageId ? `(ID: ${messageId})` : '', payload);
 }
 
@@ -79,7 +83,7 @@ function isAllowedOrigin(origin) {
   const allowedPatterns = [
     'localhost',
     'lovable.dev',
-     'https://7f818ebb-e5cc-4179-8f6c-e01617c5204a.lovableproject.com',
+    'https://7f818ebb-e5cc-4179-8f6c-e01617c5204a.lovableproject.com',
     'lovableproject.com',  // This is the key one!
     'vercel.app',
     'stackblitz.io',
@@ -111,8 +115,8 @@ async function killAllProcesses() {
 
 // Start heartbeat to establish connection
 function startHeartbeat() {
-  if (!isInIframe) {
-    updateStatus('Not in iframe - open this URL in your app', 'ready');
+  if (!isEmbedded) {
+    updateStatus('Not in iframe or popup - open this URL in your app', 'error');
     return;
   }
   
@@ -123,11 +127,14 @@ function startHeartbeat() {
       attempts++;
       console.log(`[Heartbeat] Attempt ${attempts} - Broadcasting ready signal...`);
       
+      // Send to parent or opener
+      const target = window.opener || window.parent;
+      
       // Try multiple message formats to ensure compatibility
-      window.parent.postMessage({ type: 'ready' }, '*');
-      window.parent.postMessage({ type: 'READY' }, '*');
-      window.parent.postMessage('ready', '*');
-      window.parent.postMessage({ 
+      target.postMessage({ type: 'ready' }, '*');
+      target.postMessage({ type: 'READY' }, '*');
+      target.postMessage('ready', '*');
+      target.postMessage({ 
         type: 'WEBCONTAINER_READY',
         status: 'ready',
         timestamp: Date.now() 
@@ -151,9 +158,10 @@ async function initWebContainer() {
     
     updateStatus('WebContainer ready - Waiting for parent...', 'ready');
     
-    // Send initial ready message only if in iframe
-    if (isInIframe) {
-      window.parent.postMessage({ type: 'ready' }, '*');
+    // Send initial ready message only if embedded
+    if (isEmbedded) {
+      const target = window.opener || window.parent;
+      target.postMessage({ type: 'ready' }, '*');
     }
     
     // Start heartbeat
