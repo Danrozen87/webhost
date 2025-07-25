@@ -27,6 +27,8 @@ const MESSAGE_TYPES = {
 // State
 let webcontainerInstance = null;
 let currentProcess = null;
+let devServerProcess = null;
+let installProcess = null;
 let serverUrl = null;
 let connected = false;
 let heartbeatInterval = null;
@@ -80,6 +82,26 @@ function isAllowedOrigin(origin) {
   
   // Check if origin contains any of the allowed domains
   return allowedDomains.some(domain => origin.includes(domain));
+}
+
+// Kill all running processes
+async function killAllProcesses() {
+  const processes = [currentProcess, devServerProcess, installProcess];
+  
+  for (const process of processes) {
+    if (process) {
+      try {
+        process.kill();
+        console.log('[Process] Killed process');
+      } catch (e) {
+        console.warn('[Process] Error killing process:', e);
+      }
+    }
+  }
+  
+  currentProcess = null;
+  devServerProcess = null;
+  installProcess = null;
 }
 
 // Start heartbeat to establish connection
@@ -150,6 +172,10 @@ async function initWebContainer() {
     webcontainerInstance.on('error', (error) => {
       console.error('[WebContainer Error]', error);
       showError(error.message);
+      sendMessage(MESSAGE_TYPES.ERROR, { 
+        message: error.message,
+        code: 'WEBCONTAINER_ERROR'
+      });
     });
     
   } catch (error) {
@@ -159,6 +185,35 @@ async function initWebContainer() {
       message: error.message,
       code: 'BOOT_FAILED'
     });
+  }
+}
+
+// Check if package.json exists
+async function hasPackageJson() {
+  try {
+    await webcontainerInstance.fs.readFile('/package.json', 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Get the dev command from package.json
+async function getDevCommand() {
+  try {
+    const packageJson = await webcontainerInstance.fs.readFile('/package.json', 'utf8');
+    const pkg = JSON.parse(packageJson);
+    
+    // Check for common dev scripts
+    const scripts = pkg.scripts || {};
+    if (scripts.dev) return 'dev';
+    if (scripts.start) return 'start';
+    if (scripts.serve) return 'serve';
+    
+    // Default to dev
+    return 'dev';
+  } catch {
+    return 'dev';
   }
 }
 
@@ -180,15 +235,91 @@ const messageHandlers = {
   
   [MESSAGE_TYPES.MOUNT_FILES]: async ({ files }) => {
     try {
-      updateStatus('Mounting files...', 'loading');
+      // Kill any existing processes
+      await killAllProcesses();
+      
+      // Reset preview
+      previewFrame.src = 'about:blank';
+      previewFrame.style.display = 'none';
+      loadingOverlay.classList.remove('hidden');
+      
+      // 1. Mount files
+      updateStatus('Mounting project files...', 'loading');
       await webcontainerInstance.mount(files);
-      updateStatus('Files mounted', 'ready');
-      sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { status: 'files_mounted' });
+      
+      sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
+        status: 'files_mounted',
+        message: 'Project files mounted successfully'
+      });
+      
+      // Check if we need to install dependencies
+      const hasPackage = await hasPackageJson();
+      
+      if (hasPackage) {
+        // 2. Install dependencies
+        updateStatus('Installing dependencies (this may take a moment)...', 'loading');
+        
+        installProcess = await webcontainerInstance.spawn('npm', ['install']);
+        
+        let installOutput = '';
+        installProcess.output.pipeTo(new WritableStream({
+          write(data) {
+            installOutput += data;
+            console.log('[npm install]', data);
+            sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
+              command: 'npm install',
+              data 
+            });
+          }
+        }));
+        
+        const installExitCode = await installProcess.exit;
+        installProcess = null;
+        
+        if (installExitCode !== 0) {
+          throw new Error(`npm install failed with exit code ${installExitCode}`);
+        }
+        
+        sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
+          status: 'dependencies_installed',
+          message: 'Dependencies installed successfully'
+        });
+        
+        // 3. Start dev server
+        updateStatus('Starting development server...', 'loading');
+        
+        const devCommand = await getDevCommand();
+        devServerProcess = await webcontainerInstance.spawn('npm', ['run', devCommand]);
+        
+        devServerProcess.output.pipeTo(new WritableStream({
+          write(data) {
+            console.log('[dev server]', data);
+            sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
+              command: `npm run ${devCommand}`,
+              data 
+            });
+          }
+        }));
+        
+        // The server-ready event will fire automatically when server starts
+        // and will send SERVER_READY message with the URL
+        
+      } else {
+        // No package.json - just mount and notify
+        updateStatus('Project mounted (no package.json found)', 'ready');
+        sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
+          status: 'ready',
+          message: 'Files mounted. No package.json found, skipping npm install.'
+        });
+      }
+      
     } catch (error) {
       console.error('[Mount Error]', error);
+      updateStatus(`Mount failed: ${error.message}`, 'error');
       sendMessage(MESSAGE_TYPES.ERROR, { 
         message: error.message,
-        code: 'MOUNT_FAILED'
+        code: 'MOUNT_FAILED',
+        details: error.stack
       });
     }
   },
@@ -197,7 +328,7 @@ const messageHandlers = {
     try {
       updateStatus(`Running: ${command} ${args.join(' ')}`, 'loading');
       
-      // Kill previous process if exists
+      // Kill previous command process if exists
       if (currentProcess) {
         currentProcess.kill();
       }
@@ -207,8 +338,11 @@ const messageHandlers = {
       // Stream output
       currentProcess.output.pipeTo(new WritableStream({
         write(data) {
-          sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { data });
-          console.log('[Output]', data);
+          sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
+            command: `${command} ${args.join(' ')}`,
+            data 
+          });
+          console.log('[Command Output]', data);
         }
       }));
       
@@ -216,7 +350,10 @@ const messageHandlers = {
       const exitCode = await currentProcess.exit;
       currentProcess = null;
       
-      sendMessage(MESSAGE_TYPES.COMMAND_EXIT, { exitCode });
+      sendMessage(MESSAGE_TYPES.COMMAND_EXIT, { 
+        command: `${command} ${args.join(' ')}`,
+        exitCode 
+      });
       
       if (exitCode === 0) {
         updateStatus('Command completed', 'ready');
@@ -228,7 +365,8 @@ const messageHandlers = {
       console.error('[Command Error]', error);
       sendMessage(MESSAGE_TYPES.ERROR, { 
         message: error.message,
-        code: 'COMMAND_FAILED'
+        code: 'COMMAND_FAILED',
+        command: `${command} ${args.join(' ')}`
       });
     }
   },
@@ -236,9 +374,11 @@ const messageHandlers = {
   [MESSAGE_TYPES.WRITE_FILE]: async ({ path, content }) => {
     try {
       await webcontainerInstance.fs.writeFile(path, content);
+      console.log(`[File Written] ${path}`);
       sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
         status: 'file_written',
-        path 
+        path,
+        message: `File ${path} updated successfully`
       });
     } catch (error) {
       sendMessage(MESSAGE_TYPES.ERROR, { 
@@ -340,9 +480,10 @@ window.addEventListener('beforeunload', () => {
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
   }
-  if (currentProcess) {
-    currentProcess.kill();
-  }
+  
+  // Kill all processes
+  killAllProcesses();
+  
   if (webcontainerInstance) {
     webcontainerInstance.teardown();
   }
