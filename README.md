@@ -1,4 +1,4 @@
-markdown# WebContainer Host
+# WebContainer Host
 
 Production-ready WebContainer host for AI coding platforms.
 
