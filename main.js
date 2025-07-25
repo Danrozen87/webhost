@@ -7,6 +7,9 @@ const ALLOWED_ORIGINS = [
   'http://localhost:8080',
   'https://vercel.app',
   'https://lovable.dev',
+  'https://webhost-gilt.vercel.app',  // Add your own domain!
+  'https://stackblitz.com',            // WebContainer's internal origin
+  'https://*.stackblitz.io',           // WebContainer infrastructure
   // Add your production domains here
 ];
 
