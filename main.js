@@ -87,6 +87,7 @@ function isAllowedOrigin(origin) {
     'lovableproject.com',  // This is the key one!
     'vercel.app',
     'stackblitz.io',
+    'stackblitz.com',
     'webcontainer.io'
   ];
   
