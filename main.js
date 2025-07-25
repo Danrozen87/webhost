@@ -4,6 +4,8 @@ import { WebContainer } from '@webcontainer/api';
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://localhost:8080',
+  'https://vercel.app',
   'https://lovable.dev',
   // Add your production domains here
 ];
