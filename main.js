@@ -116,10 +116,6 @@ async function killAllProcesses() {
 
 // Start heartbeat to establish connection
 function startHeartbeat() {
-  if (!isEmbedded) {
-    updateStatus('Not in iframe or popup - open this URL in your app', 'error');
-    return;
-  }
   
   let attempts = 0;
   
