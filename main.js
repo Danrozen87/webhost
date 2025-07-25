@@ -274,17 +274,26 @@ window.addEventListener('message', async (event) => {
   // Log ALL external messages
   console.log('[Received from]', event.origin, ':', event.data);
   
+  // Ignore WebContainer internal messages
+  if (event.origin.includes('stackblitz') && event.data?.type === 'init') {
+    console.log('[Ignored] WebContainer internal message');
+    return;
+  }
+  
   // Security check
   if (!isAllowedOrigin(event.origin)) {
     console.warn('[Security] Rejected message from', event.origin);
     return;
   }
   
-  // Mark as connected on first valid message
-  if (!connected && event.data && (event.data.type || typeof event.data === 'string')) {
-    connected = true;
-    clearInterval(heartbeatInterval);
-    updateStatus('Connected to parent!', 'ready');
+  // ONLY mark as connected on PING message
+  if (!connected && event.data) {
+    const messageType = event.data.type || event.data;
+    if (messageType === 'PING' || messageType === 'ping') {
+      connected = true;
+      clearInterval(heartbeatInterval);
+      updateStatus('Connected to parent!', 'ready');
+    }
   }
   
   // Handle string messages
