@@ -81,7 +81,7 @@ async function initWebContainer() {
     });
     
     updateStatus('WebContainer ready', 'ready');
-    sendMessage(MESSAGE_TYPES.READY);
+    window.parent.postMessage({ type: 'ready' }, '*');
     
     // Set up server ready listener
     webcontainerInstance.on('server-ready', (port, url) => {
