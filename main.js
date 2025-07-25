@@ -52,14 +52,20 @@ function showError(message) {
   loadingOverlay.classList.remove('hidden');
 }
 
-function sendMessage(type, payload = {}, targetOrigin = '*') {
+function sendMessage(type, payload = {}, targetOrigin = '*', messageId = null) {
   const message = {
     type,
     payload,
     timestamp: Date.now()
   };
+  
+  // Add ID for response messages
+  if (messageId) {
+    message.id = messageId;
+  }
+  
   window.parent.postMessage(message, targetOrigin);
-  console.log('[Sent]', type, payload);
+  console.log('[Sent]', type, messageId ? `(ID: ${messageId})` : '', payload);
 }
 
 function isAllowedOrigin(origin) {
@@ -69,19 +75,17 @@ function isAllowedOrigin(origin) {
   // Allow null and file origins (for testing)
   if (origin === 'null' || origin === 'file://') return true;
   
-  // List of allowed domain patterns
-  const allowedDomains = [
+  // Specific allowlist
+  const allowedPatterns = [
     'localhost',
-    'lovable',
-    'vercel',
-    'stackblitz',
-    'webcontainer.io',
-    'supabase.co',
-    'supabase.com'
+    'lovable.dev',
+    'lovableproject.com',  // This is the key one!
+    'vercel.app',
+    'stackblitz.io',
+    'webcontainer.io'
   ];
   
-  // Check if origin contains any of the allowed domains
-  return allowedDomains.some(domain => origin.includes(domain));
+  return allowedPatterns.some(pattern => origin.includes(pattern));
 }
 
 // Kill all running processes
@@ -217,193 +221,7 @@ async function getDevCommand() {
   }
 }
 
-// Message handlers
-const messageHandlers = {
-  'PING': () => {
-    connected = true;
-    clearInterval(heartbeatInterval);
-    updateStatus('Connected! Responding to PING', 'ready');
-    sendMessage(MESSAGE_TYPES.PONG);
-  },
-  
-  'ping': () => {
-    connected = true;
-    clearInterval(heartbeatInterval);
-    updateStatus('Connected! Responding to ping', 'ready');
-    sendMessage('pong');
-  },
-  
-  [MESSAGE_TYPES.MOUNT_FILES]: async ({ files }) => {
-    try {
-      // Kill any existing processes
-      await killAllProcesses();
-      
-      // Reset preview
-      previewFrame.src = 'about:blank';
-      previewFrame.style.display = 'none';
-      loadingOverlay.classList.remove('hidden');
-      
-      // 1. Mount files
-      updateStatus('Mounting project files...', 'loading');
-      await webcontainerInstance.mount(files);
-      
-      sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
-        status: 'files_mounted',
-        message: 'Project files mounted successfully'
-      });
-      
-      // Check if we need to install dependencies
-      const hasPackage = await hasPackageJson();
-      
-      if (hasPackage) {
-        // 2. Install dependencies
-        updateStatus('Installing dependencies (this may take a moment)...', 'loading');
-        
-        installProcess = await webcontainerInstance.spawn('npm', ['install']);
-        
-        let installOutput = '';
-        installProcess.output.pipeTo(new WritableStream({
-          write(data) {
-            installOutput += data;
-            console.log('[npm install]', data);
-            sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
-              command: 'npm install',
-              data 
-            });
-          }
-        }));
-        
-        const installExitCode = await installProcess.exit;
-        installProcess = null;
-        
-        if (installExitCode !== 0) {
-          throw new Error(`npm install failed with exit code ${installExitCode}`);
-        }
-        
-        sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
-          status: 'dependencies_installed',
-          message: 'Dependencies installed successfully'
-        });
-        
-        // 3. Start dev server
-        updateStatus('Starting development server...', 'loading');
-        
-        const devCommand = await getDevCommand();
-        devServerProcess = await webcontainerInstance.spawn('npm', ['run', devCommand]);
-        
-        devServerProcess.output.pipeTo(new WritableStream({
-          write(data) {
-            console.log('[dev server]', data);
-            sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
-              command: `npm run ${devCommand}`,
-              data 
-            });
-          }
-        }));
-        
-        // The server-ready event will fire automatically when server starts
-        // and will send SERVER_READY message with the URL
-        
-      } else {
-        // No package.json - just mount and notify
-        updateStatus('Project mounted (no package.json found)', 'ready');
-        sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
-          status: 'ready',
-          message: 'Files mounted. No package.json found, skipping npm install.'
-        });
-      }
-      
-    } catch (error) {
-      console.error('[Mount Error]', error);
-      updateStatus(`Mount failed: ${error.message}`, 'error');
-      sendMessage(MESSAGE_TYPES.ERROR, { 
-        message: error.message,
-        code: 'MOUNT_FAILED',
-        details: error.stack
-      });
-    }
-  },
-  
-  [MESSAGE_TYPES.RUN_COMMAND]: async ({ command, args = [] }) => {
-    try {
-      updateStatus(`Running: ${command} ${args.join(' ')}`, 'loading');
-      
-      // Kill previous command process if exists
-      if (currentProcess) {
-        currentProcess.kill();
-      }
-      
-      currentProcess = await webcontainerInstance.spawn(command, args);
-      
-      // Stream output
-      currentProcess.output.pipeTo(new WritableStream({
-        write(data) {
-          sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
-            command: `${command} ${args.join(' ')}`,
-            data 
-          });
-          console.log('[Command Output]', data);
-        }
-      }));
-      
-      // Wait for exit
-      const exitCode = await currentProcess.exit;
-      currentProcess = null;
-      
-      sendMessage(MESSAGE_TYPES.COMMAND_EXIT, { 
-        command: `${command} ${args.join(' ')}`,
-        exitCode 
-      });
-      
-      if (exitCode === 0) {
-        updateStatus('Command completed', 'ready');
-      } else {
-        updateStatus(`Command failed with exit code ${exitCode}`, 'error');
-      }
-      
-    } catch (error) {
-      console.error('[Command Error]', error);
-      sendMessage(MESSAGE_TYPES.ERROR, { 
-        message: error.message,
-        code: 'COMMAND_FAILED',
-        command: `${command} ${args.join(' ')}`
-      });
-    }
-  },
-  
-  [MESSAGE_TYPES.WRITE_FILE]: async ({ path, content }) => {
-    try {
-      await webcontainerInstance.fs.writeFile(path, content);
-      console.log(`[File Written] ${path}`);
-      sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
-        status: 'file_written',
-        path,
-        message: `File ${path} updated successfully`
-      });
-    } catch (error) {
-      sendMessage(MESSAGE_TYPES.ERROR, { 
-        message: error.message,
-        code: 'WRITE_FAILED',
-        path
-      });
-    }
-  },
-  
-  [MESSAGE_TYPES.READ_FILE]: async ({ path }) => {
-    try {
-      const content = await webcontainerInstance.fs.readFile(path, 'utf8');
-      sendMessage(MESSAGE_TYPES.FILE_CONTENT, { path, content });
-    } catch (error) {
-      sendMessage(MESSAGE_TYPES.ERROR, { 
-        message: error.message,
-        code: 'READ_FAILED',
-        path
-      });
-    }
-  }
-};
-
-// Message listener
+// Message listener with proper ID handling
 window.addEventListener('message', async (event) => {
   // Ignore messages from self
   if (event.origin === selfOrigin) {
@@ -414,49 +232,67 @@ window.addEventListener('message', async (event) => {
   // Log ALL external messages
   console.log('[Received from]', event.origin, ':', event.data);
   
-  // Ignore WebContainer internal messages
-  if (event.origin.includes('stackblitz') && event.data?.type === 'init') {
-    console.log('[Ignored] WebContainer internal message');
-    return;
-  }
-  
   // Security check
   if (!isAllowedOrigin(event.origin)) {
     console.warn('[Security] Rejected message from', event.origin);
     return;
   }
   
-  // ONLY mark as connected on PING message
-  if (!connected && event.data) {
-    const messageType = event.data.type || event.data;
-    if (messageType === 'PING' || messageType === 'ping') {
-      connected = true;
-      clearInterval(heartbeatInterval);
-      updateStatus('Connected to parent!', 'ready');
+  const message = event.data || {};
+  const { type, payload, id, timestamp } = message;
+  
+  // CRITICAL: Handle PING with proper response
+  if (type === 'PING' || type === 'ping') {
+    connected = true;
+    clearInterval(heartbeatInterval);
+    updateStatus('Connected! Responding to PING', 'ready');
+    
+    // Send PONG with same ID if provided
+    if (id) {
+      sendMessage('PONG', { timestamp: Date.now() }, event.origin, id);
+    } else {
+      sendMessage('PONG', { timestamp: Date.now() }, event.origin);
     }
+    return;
   }
   
-  // Handle string messages
-  if (typeof event.data === 'string') {
-    if (event.data.toLowerCase() === 'ping') {
-      messageHandlers['ping']();
-      return;
+  // Handle other message types with proper responses
+  try {
+    let responsePayload = null;
+    
+    switch (type) {
+      case MESSAGE_TYPES.MOUNT_FILES:
+        responsePayload = await handleMountFiles(payload);
+        break;
+        
+      case MESSAGE_TYPES.WRITE_FILE:
+        responsePayload = await handleWriteFile(payload);
+        break;
+        
+      case MESSAGE_TYPES.READ_FILE:
+        responsePayload = await handleReadFile(payload);
+        break;
+        
+      default:
+        console.log('[Unknown Message Type]', type);
+        return;
     }
-  }
-  
-  const { type, payload } = event.data || {};
-  
-  const handler = messageHandlers[type] || messageHandlers[type?.toLowerCase()];
-  if (handler) {
-    try {
-      await handler(payload);
-    } catch (error) {
-      console.error('[Handler Error]', error);
-      sendMessage(MESSAGE_TYPES.ERROR, { 
-        message: error.message,
+    
+    // Send response with same ID
+    if (id && responsePayload) {
+      sendMessage('SUCCESS', responsePayload, event.origin, id);
+    }
+    
+  } catch (error) {
+    console.error('[Handler Error]', error);
+    
+    // Send error response with same ID
+    if (id) {
+      sendMessage('ERROR', { 
+        error: error.message,
         code: 'HANDLER_ERROR',
-        type
-      });
+        type 
+      }, event.origin, id);
     }
   }
 });
@@ -488,6 +324,104 @@ window.addEventListener('beforeunload', () => {
     webcontainerInstance.teardown();
   }
 });
+
+// Separate handler functions that return responses
+async function handleMountFiles(payload) {
+  const { files } = payload;
+  
+  // Kill any existing processes
+  await killAllProcesses();
+  
+  // Reset preview
+  previewFrame.src = 'about:blank';
+  previewFrame.style.display = 'none';
+  loadingOverlay.classList.remove('hidden');
+  
+  // 1. Mount files
+  updateStatus('Mounting project files...', 'loading');
+  await webcontainerInstance.mount(files);
+  
+  // Send broadcast status update (separate from response)
+  sendMessage(MESSAGE_TYPES.STATUS_UPDATE, { 
+    status: 'files_mounted',
+    message: 'Project files mounted successfully'
+  });
+  
+  // Check if we need to install dependencies
+  const hasPackage = await hasPackageJson();
+  
+  if (hasPackage) {
+    // Install and start server (async, don't wait)
+    installAndStartServer();
+  } else {
+    updateStatus('Project mounted (no package.json found)', 'ready');
+  }
+  
+  return { status: 'mounted', hasPackage };
+}
+
+async function installAndStartServer() {
+  try {
+    // 2. Install dependencies
+    updateStatus('Installing dependencies...', 'loading');
+    
+    installProcess = await webcontainerInstance.spawn('npm', ['install']);
+    
+    installProcess.output.pipeTo(new WritableStream({
+      write(data) {
+        console.log('[npm install]', data);
+        sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
+          command: 'npm install',
+          data 
+        });
+      }
+    }));
+    
+    const installExitCode = await installProcess.exit;
+    installProcess = null;
+    
+    if (installExitCode !== 0) {
+      throw new Error(`npm install failed with exit code ${installExitCode}`);
+    }
+    
+    // 3. Start dev server
+    updateStatus('Starting development server...', 'loading');
+    
+    const devCommand = await getDevCommand();
+    devServerProcess = await webcontainerInstance.spawn('npm', ['run', devCommand]);
+    
+    devServerProcess.output.pipeTo(new WritableStream({
+      write(data) {
+        console.log('[dev server]', data);
+        sendMessage(MESSAGE_TYPES.COMMAND_OUTPUT, { 
+          command: `npm run ${devCommand}`,
+          data 
+        });
+      }
+    }));
+    
+  } catch (error) {
+    console.error('[Install/Start Error]', error);
+    updateStatus(`Failed: ${error.message}`, 'error');
+    sendMessage(MESSAGE_TYPES.ERROR, { 
+      message: error.message,
+      code: 'INSTALL_START_FAILED'
+    });
+  }
+}
+
+async function handleWriteFile(payload) {
+  const { path, content } = payload;
+  await webcontainerInstance.fs.writeFile(path, content);
+  console.log(`[File Written] ${path}`);
+  return { path, status: 'written' };
+}
+
+async function handleReadFile(payload) {
+  const { path } = payload;
+  const content = await webcontainerInstance.fs.readFile(path, 'utf8');
+  return { path, content };
+}
 
 // Initialize
 initWebContainer();
